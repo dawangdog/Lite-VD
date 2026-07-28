@@ -330,6 +330,18 @@ def get_real_video_sampler(train_videos: torch.Tensor, train_labels: torch.Tenso
     return get_images
 
 
+def resize_video_batch_to_im_size(videos: torch.Tensor, im_size):
+    """Resize a B,T,C,H,W video batch to the synthetic tensor resolution."""
+    target_h, target_w = int(im_size[0]), int(im_size[1])
+    if videos.shape[-2:] == (target_h, target_w):
+        return videos
+
+    b, t, c, _, _ = videos.shape
+    flat = videos.reshape(b * t, c, videos.shape[-2], videos.shape[-1])
+    flat = F.interpolate(flat, size=(target_h, target_w), mode="bilinear", align_corners=False)
+    return flat.reshape(b, t, c, target_h, target_w)
+
+
 def evaluate_pixel_synthetic_tensor(
     image_syn,
     label_syn,
@@ -381,7 +393,9 @@ def run_dm_baseline(
     if args.init == "real":
         print("Initialize pixel synthetic videos from random real videos")
         for c in range(num_classes):
-            image_syn.data[c * args.ipc:(c + 1) * args.ipc] = get_images(c, args.ipc).detach().data
+            real_batch = get_images(c, args.ipc).detach()
+            real_batch = resize_video_batch_to_im_size(real_batch, im_size)
+            image_syn.data[c * args.ipc:(c + 1) * args.ipc] = real_batch.data
     else:
         print("Initialize pixel synthetic videos from random noise")
 
@@ -483,7 +497,9 @@ def run_mtt_baseline(
     if args.init == "real":
         print("Initialize pixel synthetic videos from random real videos")
         for c in range(num_classes):
-            image_syn.data[c * args.ipc:(c + 1) * args.ipc] = get_images(c, args.ipc).detach().data
+            real_batch = get_images(c, args.ipc).detach()
+            real_batch = resize_video_batch_to_im_size(real_batch, im_size)
+            image_syn.data[c * args.ipc:(c + 1) * args.ipc] = real_batch.data
     else:
         print("Initialize pixel synthetic videos from random noise")
 
@@ -595,6 +611,7 @@ def run_lvdd_baseline(
     labels_all: torch.Tensor,
     args,
 ):
+    selected_indices = None
     image_syn = torch.randn(
         size=(labels_all.unique().numel() * args.ipc, video_latents.shape[-4], video_latents.shape[-3], video_latents.shape[-2], video_latents.shape[-1]),
         dtype=torch.float,
@@ -618,7 +635,13 @@ def run_lvdd_baseline(
             return latents_cpu[idx_shuffle[0]].unsqueeze(0).to(args.device)
         return torch.stack([latents_cpu[i] for i in idx_shuffle], dim=0).to(args.device)
 
-    if args.lvdd_select_mode == "full":
+    if args.selected_indices_file:
+        print(f"Reusing selected indices for LVDD from {args.selected_indices_file}")
+        selected_indices = load_selected_indices(args.selected_indices_file, total_videos=len(video_latents))
+        image_syn = video_latents[selected_indices].to(args.device)
+        label_syn = labels_all[selected_indices].to(args.device)
+    elif args.lvdd_select_mode == "full":
+        selected_indices = list(range(len(labels_all)))
         image_syn = video_latents.detach().clone().to(args.device)
         label_syn = labels_all.detach().clone().to(args.device)
     elif args.lvdd_select_mode == "kmeans":
@@ -727,7 +750,7 @@ def run_lvdd_baseline(
             reconstructed_batches.append(batch_reconstructed)
         image_syn = torch.cat(reconstructed_batches, dim=0).to(args.device)
 
-    return image_syn.float(), label_syn.long()
+    return image_syn.float(), label_syn.long(), selected_indices
 
 
 def evaluate_vdsd_baseline(
@@ -1343,6 +1366,14 @@ def load_existing_artifact(artifact_path: str) -> dict:
     if not isinstance(artifact, dict):
         raise ValueError(f"Artifact at {artifact_path} is not a dictionary payload.")
 
+    if "labels" in artifact and (
+        "videos" in artifact
+        or "compressed_videos" in artifact
+        or "latents" in artifact
+        or "images" in artifact
+    ):
+        return artifact
+
     required_keys = ["labels", "videos"]
     missing = [key for key in required_keys if key not in artifact]
     if missing:
@@ -1448,6 +1479,34 @@ def save_pixelspace_artifact(
         "frames": int(args.frames),
         "pixel_artifact_dtype": storage_dtype,
         "images": images_to_save,
+        "labels": label_syn.detach().cpu().long(),
+        "selected_indices": torch.tensor(selected_indices or [], dtype=torch.long),
+        "class_names": class_names,
+    }
+    torch.save(payload, artifact_path)
+    return artifact_path
+
+
+def save_latent_baseline_artifact(
+    latent_syn: torch.Tensor,
+    label_syn: torch.Tensor,
+    args,
+    project_name: str,
+    run_name: str,
+    selected_indices=None,
+    class_names=None,
+    artifact_filename: str = "synthetic_data.pt",
+):
+    save_dir = os.path.join(args.save_path, project_name, run_name)
+    os.makedirs(save_dir, exist_ok=True)
+    artifact_path = os.path.join(save_dir, artifact_filename)
+    payload = {
+        "format": "latent_baseline_artifact_v1",
+        "dataset": args.dataset,
+        "method": args.method,
+        "vae_model": args.vae_model,
+        "frames": int(args.frames),
+        "latents": latent_syn.detach().cpu().float(),
         "labels": label_syn.detach().cpu().long(),
         "selected_indices": torch.tensor(selected_indices or [], dtype=torch.long),
         "class_names": class_names,
@@ -1893,7 +1952,28 @@ def main(args):
         print(f"\nReusing prebuilt distilled artifact from {args.artifact_file}")
         artifact = load_existing_artifact(args.artifact_file)
         artifact_report = load_existing_report(args.artifact_file)
-        image_syn = reconstruct_distilled_latents(artifact, args)
+        if "images" in artifact:
+            image_syn = artifact["images"].float()
+            label_syn = artifact["labels"].long()
+            if artifact_report is not None:
+                print(f"Artifact report: {artifact_report}")
+                wandb.log(artifact_report)
+            evaluate_pixelspace_baseline(
+                image_syn,
+                label_syn,
+                args,
+                channel,
+                num_classes,
+                im_size,
+                model_eval_pool,
+                dst_test,
+            )
+            wandb.finish()
+            return
+        if "latents" in artifact:
+            image_syn = artifact["latents"].float()
+        else:
+            image_syn = reconstruct_distilled_latents(artifact, args)
         label_syn = artifact["labels"].long()
 
         if artifact_report is not None:
@@ -2098,7 +2178,45 @@ def main(args):
     labels_all = train_labels.long()
 
     if args.method in LATENT_LVDD_METHODS:
-        image_syn, label_syn = run_lvdd_baseline(video_latents, labels_all, args)
+        image_syn, label_syn, lvdd_selected_indices = run_lvdd_baseline(video_latents, labels_all, args)
+        lvdd_artifact_path = save_latent_baseline_artifact(
+            image_syn,
+            label_syn,
+            args,
+            project_name,
+            wandb_run.name,
+            selected_indices=lvdd_selected_indices,
+            class_names=class_names,
+        )
+        print(f"LVDD latent artifact saved to: {lvdd_artifact_path}")
+        if args.skip_eval_after_distill:
+            report = build_lvdd_report(
+                original_latents=video_latents,
+                distilled_latents=image_syn,
+                original_labels=labels_all,
+                distilled_labels=label_syn,
+                args=args,
+                runtime_stats=latent_runtime_stats,
+                evaluation_stats={
+                    "decode_seconds": 0.0,
+                    "decode_peak_gpu_memory_mb": 0.0,
+                },
+            )
+            report.update(
+                {
+                    "stored_artifact_mb": os.path.getsize(lvdd_artifact_path) / (1024 ** 2),
+                    "artifact_path": lvdd_artifact_path,
+                }
+            )
+            report_path = os.path.join(os.path.dirname(lvdd_artifact_path), "distill_report.json")
+            with open(report_path, "w", encoding="utf-8") as f:
+                json.dump(report, f, indent=2)
+            print("Skipping downstream evaluation after LVDD selection; artifact/report saved for visualization.")
+            print(f"LVDD report saved to: {report_path}")
+            print(f"LVDD-style baseline report: {report}")
+            wandb.log(report)
+            wandb.finish()
+            return
         eval_summary = evaluate_distilled_set(
             image_syn,
             label_syn,
@@ -2121,6 +2239,16 @@ def main(args):
             runtime_stats=latent_runtime_stats,
             evaluation_stats=eval_summary,
         )
+        report.update(
+            {
+                "stored_artifact_mb": os.path.getsize(lvdd_artifact_path) / (1024 ** 2),
+                "artifact_path": lvdd_artifact_path,
+            }
+        )
+        report_path = os.path.join(os.path.dirname(lvdd_artifact_path), "distill_report.json")
+        with open(report_path, "w", encoding="utf-8") as f:
+            json.dump(report, f, indent=2)
+        print(f"LVDD report saved to: {report_path}")
         print(f"LVDD-style baseline report: {report}")
         wandb.log(report)
         wandb.finish()
