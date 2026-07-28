@@ -8,7 +8,7 @@ from types import SimpleNamespace
 import numpy as np
 import torch
 import torch.nn.functional as F
-from PIL import Image, ImageDraw
+from PIL import Image, ImageDraw, ImageFont
 from einops import rearrange
 
 from dquantize_3dvae import use_quantized_3dvae
@@ -206,21 +206,40 @@ def make_grid(frames, pad=6, label=None):
     return canvas
 
 
-def make_method_frame_grid(rows, row_labels, chosen_frames, out_path, pad=6, label_w=132, label_h=22):
+def load_grid_font(font_size):
+    font_paths = [
+        "/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf",
+        "/usr/share/fonts/truetype/liberation2/LiberationSans-Regular.ttf",
+        "/usr/share/fonts/truetype/liberation/LiberationSans-Regular.ttf",
+    ]
+    for font_path in font_paths:
+        if os.path.exists(font_path):
+            return ImageFont.truetype(font_path, font_size)
+    return ImageFont.load_default()
+
+
+def make_method_frame_grid(rows, row_labels, chosen_frames, out_path, pad=6, label_w=132, label_h=22, label_font_size=20):
     frame_arrays = [[normalize_to_uint8(row)[idx] for idx in chosen_frames] for row in rows]
     h, w, _ = frame_arrays[0][0].shape
     grid_w = label_w + len(chosen_frames) * w + (len(chosen_frames) - 1) * pad
     grid_h = label_h + len(rows) * h + (len(rows) - 1) * pad
     canvas = Image.new("RGB", (grid_w, grid_h), color=(255, 255, 255))
     draw = ImageDraw.Draw(canvas)
+    label_font = load_grid_font(label_font_size)
+    header_font = load_grid_font(max(10, int(label_font_size * 0.8)))
 
     for col_idx, frame_id in enumerate(chosen_frames):
         x = label_w + col_idx * (w + pad)
-        draw.text((x + 3, 4), f"t={frame_id}", fill=(70, 70, 70))
+        draw.text((x + 3, 4), f"t={frame_id}", fill=(70, 70, 70), font=header_font)
 
     for row_idx, (frames, label) in enumerate(zip(frame_arrays, row_labels)):
         y = label_h + row_idx * (h + pad)
-        draw.text((6, y + h // 2 - 6), label, fill=(0, 0, 0))
+        try:
+            text_box = draw.textbbox((0, 0), label, font=label_font)
+            text_h = text_box[3] - text_box[1]
+        except AttributeError:
+            text_h = draw.textsize(label, font=label_font)[1]
+        draw.text((6, y + max(0, (h - text_h) // 2)), label, fill=(0, 0, 0), font=label_font)
         for col_idx, frame in enumerate(frames):
             x = label_w + col_idx * (w + pad)
             canvas.paste(Image.fromarray(frame), (x, y))
