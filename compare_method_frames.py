@@ -5,7 +5,7 @@ from types import SimpleNamespace
 
 import numpy as np
 import torch
-from PIL import Image, ImageDraw
+from PIL import Image, ImageDraw, ImageFont
 
 from dquantize_3dvae import use_quantized_3dvae
 from quantize_vae import use_quantized_vae
@@ -143,7 +143,19 @@ def sample_frames_for_grid(video: torch.Tensor, max_frames: int):
     return normalize_to_uint8(video)[ids]
 
 
-def make_comparison_grid(rows, labels, out_path, max_frames=8, pad=6, label_w=128):
+def load_grid_font(font_size):
+    font_paths = [
+        "/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf",
+        "/usr/share/fonts/truetype/liberation2/LiberationSans-Regular.ttf",
+        "/usr/share/fonts/truetype/freefont/FreeSans.ttf",
+    ]
+    for font_path in font_paths:
+        if os.path.exists(font_path):
+            return ImageFont.truetype(font_path, font_size)
+    return ImageFont.load_default()
+
+
+def make_comparison_grid(rows, labels, out_path, max_frames=8, pad=6, label_w=128, label_font_size=10):
     if not rows:
         raise ValueError("No rows were provided for comparison grid.")
 
@@ -157,10 +169,16 @@ def make_comparison_grid(rows, labels, out_path, max_frames=8, pad=6, label_w=12
     grid_h = len(rows) * h + (len(rows) - 1) * pad
     canvas = Image.new("RGB", (grid_w, grid_h), color=(255, 255, 255))
     draw = ImageDraw.Draw(canvas)
+    label_font = load_grid_font(label_font_size)
 
     for row_idx, (frames, label) in enumerate(zip(frame_arrays, labels)):
         y = row_idx * (h + pad)
-        draw.text((6, y + h // 2 - 6), label, fill=(0, 0, 0))
+        try:
+            text_box = draw.textbbox((0, 0), label, font=label_font)
+            text_h = text_box[3] - text_box[1]
+        except AttributeError:
+            text_h = draw.textsize(label, font=label_font)[1]
+        draw.text((6, y + max(0, (h - text_h) // 2)), label, fill=(0, 0, 0), font=label_font)
         for col_idx, frame in enumerate(frames):
             x = label_w + col_idx * (w + pad)
             canvas.paste(Image.fromarray(frame), (x, y))
@@ -204,6 +222,7 @@ def main():
     parser.add_argument("--max_frames", type=int, default=8, help="Number of frames shown.")
     parser.add_argument("--batch_size", type=int, default=8, help="VAE decode batch size for Ours.")
     parser.add_argument("--device", default="cpu", help="cuda/cpu for decoding Ours.")
+    parser.add_argument("--label_font_size", type=int, default=10, help="Font size for row labels in the output grid.")
     parser.add_argument("--output", default="./paper_ours_visualizations/ours_vs_dm_frames.png")
     args = parser.parse_args()
 
@@ -275,6 +294,7 @@ def main():
         labels=labels,
         max_frames=args.max_frames,
         out_path=out_path,
+        label_font_size=args.label_font_size,
     )
     print(f"Saved comparison figure to: {out_path.resolve()}")
 
