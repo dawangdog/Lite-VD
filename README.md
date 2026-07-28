@@ -7,7 +7,7 @@ Hello! Thanks for checking out our code supplement. This archive contains the im
 1. Enter the code directory:
 
 ```bash
-cd IALTD
+cd Lite-VD
 ```
 
 2. Install the required environment:
