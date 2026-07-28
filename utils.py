@@ -74,7 +74,7 @@ def get_dataset(dataset, data_path, num_workers=0,img_size=(112,112),split_num=1
         # this is a video dataset
         channel = 3
         
-        im_size = (112,112)
+        im_size = (64,64)
         num_classes = 174
 
         mean = [0.485, 0.456, 0.406]
@@ -756,7 +756,9 @@ def evaluate_synset(it_eval, net, images_train, labels_train, testloader, args, 
             with torch.no_grad():
                 loss_test, acc_test, acc_per= epoch('test', testloader, net, optimizer, criterion, args)
                 last_eval_epoch = ep
-                if args.eval_mode != 'top5':
+                if args.eval_mode == 'top5':
+                    print('%s Evaluate_%02d: Ep %d time = %ds loss = %.6f train top5 acc = %.2f, test top5 acc = %.2f' % (get_time(), it_eval, ep, int(time.time() - start), loss_train, acc_train*100, acc_test*100))
+                else:
                     print('%s Evaluate_%02d: Ep %d time = %ds loss = %.6f train acc = %.2f, test acc = %.2f' % (get_time(), it_eval, ep, int(time.time() - start), loss_train, acc_train*100, acc_test*100))
                     #print('acc_per', acc_per)
         if ep in lr_schedule:
@@ -777,7 +779,9 @@ def evaluate_synset(it_eval, net, images_train, labels_train, testloader, args, 
         with torch.no_grad():
             loss_test, acc_test, acc_per = epoch('test', testloader, net, optimizer, criterion, args)
             last_eval_epoch = Epoch
-            if args.eval_mode != 'top5':
+            if args.eval_mode == 'top5':
+                print('%s Evaluate_%02d: Ep %d time = %ds loss = %.6f train top5 acc = %.2f, test top5 acc = %.2f' % (get_time(), it_eval, Epoch, int(time.time() - start), loss_train, acc_train*100, acc_test*100))
+            else:
                 print('%s Evaluate_%02d: Ep %d time = %ds loss = %.6f train acc = %.2f, test acc = %.2f' % (get_time(), it_eval, Epoch, int(time.time() - start), loss_train, acc_train*100, acc_test*100))
 
     time_train = time.time() - start
