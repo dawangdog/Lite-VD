@@ -179,22 +179,44 @@ Visualize decoded distilled samples:
 ```bash
 python show_img.py \
   --artifact logged_files/.../synthetic_data.pt \
-  --vae_model 2DVAE \
-  --class_id 1 \
-  --num_videos 1 \
-  --save_dir paper_ours_visualizations/example
+  --sample_ids 0,24,48 \
+  --max_frames 8 \
+  --batch_size 8 \
+  --device cuda \
+  --output_dir paper_ours_visualizations/example
 ```
 
-Compare baseline and our distilled frames:
+Generate a same-video paper comparison between LVDD and Lite-VD:
+
+```bash
+python show_img.py \
+  --artifact logged_files/.../ours/synthetic_data.pt \
+  --comparison_artifact logged_files/.../lvdd/synthetic_data.pt \
+  --comparison_label LVDD \
+  --paper_compare \
+  --sample_ids 23 \
+  --max_frames 8 \
+  --batch_size 8 \
+  --device cuda \
+  --data_path distill_utils/data \
+  --output_dir paper_ours_visualizations/example_compare
+```
+
+Compare a pixel-space baseline and our distilled frames:
 
 ```bash
 python compare_method_frames.py \
-  --baseline_artifact logged_files/.../baseline/synthetic_data.pt \
   --ours_artifact logged_files/.../ours/synthetic_data.pt \
+  --baseline_artifact logged_files/.../baseline/synthetic_data.pt \
+  --lvdd_artifact logged_files/.../lvdd/synthetic_data.pt \
+  --baseline_name DM \
+  --lvdd_name LVDD \
   --vae_model 2DVAE \
   --class_id 1 \
   --rank 0 \
-  --save_dir paper_ours_visualizations/example_compare
+  --max_frames 8 \
+  --label_font_size 20 \
+  --output paper_ours_visualizations/example_compare/ours_vs_baselines.png
 ```
 
 ## Workflow
