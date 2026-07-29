@@ -220,6 +220,9 @@ python compare_method_frames.py \
 ```
 
 ## Workflow
+The overall Lite-VD pipeline is shown below:
+
+![Lite-VD workflow](framework.png)
 
 The code follows this pipeline:
 
